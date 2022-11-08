@@ -76,16 +76,16 @@ class BerTlvElement():
 
     def __str__(self):
         if len(self.__children_tlvs) > 0:
-            return f"""{self.get_tag().hex()}  {self.get_length()}   {self.get_value_as_hex_str()}
-{self.__children_tlvs}"""
+            return f"""{self.get_tag().hex()}  {self.get_length()} 
+    {self.__children_tlvs}"""
         else:
             return f"{self.get_tag().hex()}  {self.get_length()}   {self.get_value_as_hex_str()}"
 
 
     def __repr__(self):
         if len(self.__children_tlvs) > 0:
-            return f"""{self.get_tag().hex()}  {self.get_length()}   {self.get_value_as_hex_str()}
-        {self.__children_tlvs}
+            return f"""{self.get_tag().hex()}  {self.get_length()}  
+    {self.__children_tlvs}
         """
         else:
             return f"""{self.get_tag().hex()}  {self.get_length()}   {self.get_value_as_hex_str()}"""
@@ -95,10 +95,10 @@ class BerTlvElement():
         tag_class = get_bit_range_as_int(byte, 6, 8)
         is_constructed = get_bit_range_as_int(byte, 5, 6)
         tag_type = get_bit_range_as_int(byte, 0, 5)
-        print(f"tag analysed: {byte:02X}")
-        print(f"tag_class: {tag_class:02X}")
-        print(f"is_constructed: {is_constructed}")
-        print(f"tag_type: {tag_type}")
+        # print(f"tag analysed: {byte:02X}")
+        # print(f"tag_class: {tag_class:02X}")
+        # print(f"is_constructed: {is_constructed}")
+        # print(f"tag_type: {tag_type}")
         return Tag(TLV_TAG_CLASS(tag_class), is_constructed, tag_type, tag_type == 31)
 
     def get_class(self):
@@ -202,6 +202,7 @@ class BerTlvParser():
         # self.__current_parsing_state = BerTlvParser.state.EXPECTING_TAG
 
     def parse_tlv_hex_str(self, bytesHexStr, parent_tlv = None):
+        print(f"parse_tlv_hex_str called for {bytesHexStr}")
         bytes = binascii.unhexlify(bytesHexStr)
         tlv_tag = None
         current_parsing_state = BerTlvParser.state.EXPECTING_TAG
@@ -238,25 +239,39 @@ class BerTlvParser():
             elif current_parsing_state == BerTlvParser.state.EXPECTING_VALUE:
                 if 0 != tlv_tag.set_value(byte):
                     current_parsing_state = self.changeParsingState(current_parsing_state, BerTlvParser.state.EXPECTING_VALUE_NEXT_BYTE)
+                else:
+                    if parent_tlv:
+                        parent_tlv.add_child(tlv_tag)
+                        current_parsing_state = self.changeParsingState(current_parsing_state,
+                                                                        BerTlvParser.state.EXPECTING_TAG)
+
+                    else:
+                        return tlv_tag
+
 
             elif current_parsing_state == BerTlvParser.state.EXPECTING_VALUE_NEXT_BYTE:
                 if 0 == tlv_tag.add_value_byte(byte):
                     current_parsing_state = self.changeParsingState(current_parsing_state, BerTlvParser.state.EXPECTING_TAG)
-                    # if tlv_tag.is_constructed:
-                    #     child_tlv = self.parse_tlv_hex_str(tlv_tag.get_value_as_hex_str(), tlv_tag)
-                    #     tlv_tag.add_child(child_tlv)
-                    if idx+1 < raw_bytes_length and parent_tlv:
+                    if tlv_tag.is_constructed:
+                        self.parse_tlv_hex_str(tlv_tag.get_value_as_hex_str(), tlv_tag)
+                    if parent_tlv:
                         parent_tlv.add_child(tlv_tag)
-                        tlv_tag = None
-                    elif idx+1 < raw_bytes_length:
-                        print("TODO: log warning here: not all bytes used in parsing")
+                        # tlv_tag = None
+                    else:
+                        return tlv_tag
+
+                    # if idx+1 < raw_bytes_length and parent_tlv:
+                    #     parent_tlv.add_child(tlv_tag)
+                    #     tlv_tag = None
+                    # elif idx+1 < raw_bytes_length:
+                    #     print("TODO: log warning here: not all bytes used in parsing")
 
 
-        else:
-            if tlv_tag.is_constructed:
-                child_tlv = self.parse_tlv_hex_str(tlv_tag.get_value_as_hex_str(), tlv_tag)
-                tlv_tag.add_child(child_tlv)
-            tlv_tag.mark_as_complete()
+        # else:
+        #     if tlv_tag.is_constructed:
+        #         child_tlv = self.parse_tlv_hex_str(tlv_tag.get_value_as_hex_str(), tlv_tag)
+        #         tlv_tag.add_child(child_tlv)
+        #     tlv_tag.mark_as_complete()
         return tlv_tag
 
     def __parse_tag_next_byte(self, byte):
@@ -264,7 +279,7 @@ class BerTlvParser():
         tag_type = get_bit_range_as_int(byte, 0, 8)
         print(f"more: {more}")
         print(f"tag_type: {tag_type:02X}")
-        return TagTypeBytes(tag_type, more)
+        return TagTypeBytes(more, tag_type)
 
     def __parse_length(self, byte):
         is_long_form = (1 == get_bit_range_as_int(byte, 7, 8))
