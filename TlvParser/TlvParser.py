@@ -84,12 +84,20 @@ class BerTlvElement():
         self.__length_of_length     = 0
         self.__length_bytes         = [0]
 
+        self.__children_tlvs = OrderedDict()
+
         if value:
-            for value_byte in value:
-                self.__value_bytes.append(value_byte)
-            if len(self.__value_bytes):
-                self.__length_bytes     = self.__convert_int_length_to_tlv_bytes(len(self.__value_bytes))
-                self.__length_of_length = len(self.__length_bytes)
+            if isinstance(value, dict):
+                for tag, tlv_item in value.items():
+                    self.__children_tlvs[tag] = tlv_item
+                    self.is_constructed = True
+                    # TODO: check if it is necessary to do something with length here..
+            else:
+                for value_byte in value:
+                    self.__value_bytes.append(value_byte)
+                if len(self.__value_bytes):
+                    self.__length_bytes     = self.__convert_int_length_to_tlv_bytes(len(self.__value_bytes))
+                    self.__length_of_length = len(self.__length_bytes)
 
         # if length:
         #     self.__length_bytes     = self.__convert_int_length_to_tlv_bytes(length)
@@ -98,8 +106,6 @@ class BerTlvElement():
         self.is_length_long_form = False
         if len(self.__length_bytes) > 1:
             self.is_length_long_form = True
-
-        self.__children_tlvs = OrderedDict()
 
 
     def __str__(self):
@@ -110,7 +116,7 @@ class BerTlvElement():
 
     def __repr__(self):
         if len(self.__children_tlvs) > 0:
-            return f"{self.get_tag().hex()}  {self.get_length()}"
+            return f"{self.get_tag().hex()}  {self.get_length()}  {self.get_children()}"
         else:
             return f"{self.get_tag().hex()}  {self.get_length()}   {self.get_value_as_hex_str()}"
 
@@ -156,8 +162,11 @@ class BerTlvElement():
     def set_length_of_length(self, length_of_length):
         self.__length_of_length = length_of_length
 
-    def set_length(self, length):
+    def clear_length_bytes(self):
         self.__length_bytes.clear()
+
+    def set_length(self, length):
+        self.clear_length_bytes()
         self.__length_bytes.append(length.to_bytes(1, 'big')[0])
 
     def get_length(self):
@@ -168,6 +177,7 @@ class BerTlvElement():
 
     def add_length_byte(self, byte):
         'returns number of bytes left'
+
         self.__length_bytes.append(byte)
         # print(f"Length bytes left: {self.__length_of_length - len(self.__length_bytes)}")
         return self.__length_of_length - len(self.__length_bytes)
@@ -190,6 +200,7 @@ class BerTlvElement():
         return self.get_length() - len(self.__value_bytes)
 
     def get_value_as_hex_str(self):
+        # print(f"Bytes are: {self.__value_bytes}")
         return (bytes(self.__value_bytes)).hex()
 
     def get_value_as_int(self):
@@ -304,7 +315,7 @@ class BerTlvParser():
         # self.__current_parsing_state = BerTlvParser.state.EXPECTING_TAG
 
     def parse_tlv(self, bytesHexStr, parent_tlv = None):
-        # print(f"parse_tlv_hex_str called for {bytesHexStr}")
+        print(f"parse_tlv_hex_str called for {bytesHexStr}")
         bytes = binascii.unhexlify(bytesHexStr)
         tlv_tag = None
         current_parsing_state = BerTlvParser.state.EXPECTING_TAG
@@ -330,6 +341,7 @@ class BerTlvParser():
                 if length.is_long_form:
                     current_parsing_state = self.changeParsingState(current_parsing_state, BerTlvParser.state.EXPECTING_LENGTH_NEXT_BYTE)
                     tlv_tag.set_length_of_length(length.length)
+                    tlv_tag.clear_length_bytes()   # we need this line  because by default empty tag already has one zero byte assigned as a length byte
                 else:
                     tlv_tag.set_length(length.length)
                     current_parsing_state = self.changeParsingState(current_parsing_state, BerTlvParser.state.EXPECTING_VALUE)
@@ -389,8 +401,17 @@ class BerTlv():
             self.tlv_elements[data.get_tag().hex()] = data
         elif isinstance(data, list):
             for tlv_element in data:
-                self.tlv_elements[data.get_tag().hex()] = tlv_element
+                self.tlv_elements[tlv_element.get_tag().hex()] = tlv_element
+        elif isinstance(data, dict):
+            for tag, tlv_element in data.items():
+                self.tlv_elements[tag] = tlv_element
 
+    # def get_tlv_tree_from_list(self, l_tlv, destination_dict):
+    #     if len(destination_dict == 0):
+    #         for tlv_element in l_tlv:
+    #             if len(tlv_element.get_children()) > 0:
+    #                 self.get_tlv_tree_from_list(l_tlv, destination_dict)
+    #
 
     def __wrap_with_dummy_tag(self):
         if len(self.tlv_elements) == 0:
