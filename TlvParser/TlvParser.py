@@ -107,6 +107,10 @@ class BerTlvElement():
         if len(self.__length_bytes) > 1:
             self.is_length_long_form = True
 
+    def __eq__(self, other):
+        return self.get_tag() == other.get_tag() and \
+               self.get_length() == other.get_length() and \
+               self.get_value() == other.get_value()
 
     def __str__(self):
         if len(self.__children_tlvs) > 0:
@@ -140,10 +144,7 @@ class BerTlvElement():
         return bytes(self.__tag_bytes)
 
     def get_value(self):
-        if not self.__is_complete:
-            return None
-
-        return bytes(self.__value_bytes)
+       return bytes(self.__value_bytes)
 
     def is_tag_long_form(self):
         return self.__is_tag_type_long_form
@@ -315,7 +316,7 @@ class BerTlvParser():
         # self.__current_parsing_state = BerTlvParser.state.EXPECTING_TAG
 
     def parse_tlv(self, bytesHexStr, parent_tlv = None):
-        print(f"parse_tlv_hex_str called for {bytesHexStr}")
+        # print(f"parse_tlv_hex_str called for {bytesHexStr}")
         bytes = binascii.unhexlify(bytesHexStr)
         tlv_tag = None
         current_parsing_state = BerTlvParser.state.EXPECTING_TAG
@@ -439,7 +440,9 @@ class BerTlv():
 
         # tag_dict = root_tag.get_as_dict()
         current_tag = root_tag
-        for path_element in path_elements:
+        # if current_tag.get_tag().hex().upper() != path_elements[0]:
+        #     return None
+        for idx, path_element in enumerate(path_elements):
             if isinstance(current_tag, BerTlvElement):
                 if current_tag.get_tag().hex().upper() == path_element:
                     current_tag = current_tag.get_children()
@@ -447,6 +450,8 @@ class BerTlv():
                     return None
             elif isinstance(current_tag, OrderedDict):
                 current_tag = current_tag.get(path_element, None)
+                if idx < len(path_elements) - 1:
+                    current_tag = current_tag.get_children()
             if not current_tag:
                 return None
         return current_tag
