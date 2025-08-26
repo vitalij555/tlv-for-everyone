@@ -6,6 +6,9 @@ name = "pypi"
 [packages]
 bitops = "*"
 hypothesis = "*"
+twine = "*"
+pkginfo = "*"
+readme-renderer = "*"
 
 [dev-packages]
 
