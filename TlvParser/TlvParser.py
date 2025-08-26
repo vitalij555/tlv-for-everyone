@@ -64,48 +64,52 @@ class TLV_TAG_TYPE(Enum):
     RELATIVE_OID_IRI  = ()
 
 
+Tag = namedtuple('Tag', ['tag_class', 'is_constructed', 'tag_type', 'is_long_form'])
+TagTypeBytes = namedtuple('TagTypeBytes', ['more', 'tag_type'])
+Length = namedtuple('Length', ['is_long_form', 'length'])
+
+
 class BerTlvElement():
-    def __init__(self, tag, value = None):
+    def __init__(self, tag, value=None):
         self.__tag_bytes = None
         if isinstance(tag, int):
-            self.tag  = tag
-            self.__tag_bytes = tag.to_bytes(get_effective_length_in_bytes(tag), byteorder = "big")
+            self.tag = tag
+            self.__tag_bytes = tag.to_bytes(get_effective_length_in_bytes(tag), byteorder="big")
         elif isinstance(tag, bytes):
-            self.tag  = int.from_bytes(tag, byteorder="big")
+            self.tag = int.from_bytes(tag, byteorder="big")
             self.__tag_bytes = tag
+        else:
+            raise TypeError("tag must be int or bytes")
 
-        self.is_dummy                = False
-        if self.tag == DUMMY_TAG:
-            self.is_dummy = True
+        self.is_dummy = (self.tag == DUMMY_TAG)
 
-        self.tag_class, self.is_constructed, self.__tag_type_first_octet, self.is_tag_long_form = self.__parse_tag(self.__tag_bytes[0])
-        self.__value_bytes           = []
+        parsed = self.__parse_tag(self.__tag_bytes[0])
+        self.tag_class = parsed.tag_class
+        self.is_constructed = bool(parsed.is_constructed)
+        self.__tag_type_first_octet = parsed.tag_type
+        self.__is_tag_long_form = bool(parsed.is_long_form)
 
-        self.__length_of_length     = 0
-        self.__length_bytes         = [0]
+        self.__value_bytes = bytearray()
+
+        self.__length_of_length = 0
+        self.__length_bytes = bytearray([0])
 
         self.__children_tlvs = OrderedDict()
 
-        if value:
+        if value is not None:
             if isinstance(value, dict):
-                for tag, tlv_item in value.items():
-                    self.__children_tlvs[tag] = tlv_item
-                    self.is_constructed = True
-                    # TODO: check if it is necessary to do something with length here..
+                for t, tlv_item in value.items():
+                    self.__children_tlvs[t] = tlv_item
+                self.is_constructed = True
             else:
-                for value_byte in value:
-                    self.__value_bytes.append(value_byte)
+                # value is bytes-like
+                for b in value:
+                    self.__value_bytes.append(b)
                 if len(self.__value_bytes):
-                    self.__length_bytes     = self.__convert_int_length_to_tlv_bytes(len(self.__value_bytes))
+                    self.__length_bytes = bytearray(self.__convert_int_length_to_tlv_bytes(len(self.__value_bytes)))
                     self.__length_of_length = len(self.__length_bytes)
 
-        # if length:
-        #     self.__length_bytes     = self.__convert_int_length_to_tlv_bytes(length)
-        #     self.__length_of_length = len(self.__length_bytes)
-
-        self.is_length_long_form = False
-        if len(self.__length_bytes) > 1:
-            self.is_length_long_form = True
+        self.is_length_long_form = (len(self.__length_bytes) > 1)
 
     def __eq__(self, other):
         return self.get_tag() == other.get_tag() and \
@@ -125,7 +129,6 @@ class BerTlvElement():
             return f"{self.get_tag().hex()}  {self.get_length()}   {self.get_value_as_hex_str()}"
 
     def __parse_tag(self, first_byte):
-        # byte = binascii.unhexlify(byteHexStr)
         tag_class = get_bit_range_as_int(first_byte, 6, 8)
         is_constructed = get_bit_range_as_int(first_byte, 5, 6)
         tag_type = get_bit_range_as_int(first_byte, 0, 5)
@@ -144,16 +147,16 @@ class BerTlvElement():
         return bytes(self.__tag_bytes)
 
     def get_value(self):
-       return bytes(self.__value_bytes)
+        return bytes(self.__value_bytes)
 
     def is_tag_long_form(self):
-        return self.__is_tag_type_long_form
+        return self.__is_tag_long_form
 
     def is_tag_constructed(self):
-        return self.is_tag_constructed()
+        return self.is_constructed
 
-    def set_tag_type_bytes(self, bytes):
-        self.__tag_bytes = bytes
+    def set_tag_type_bytes(self, b):
+        self.__tag_bytes = b
 
     def add_tag_type_byte(self, byte):
         if isinstance(byte, int):
@@ -164,139 +167,120 @@ class BerTlvElement():
         self.__length_of_length = length_of_length
 
     def clear_length_bytes(self):
-        self.__length_bytes.clear()
+        self.__length_bytes = bytearray()
 
     def set_length(self, length):
         self.clear_length_bytes()
-        self.__length_bytes.append(length.to_bytes(1, 'big')[0])
+        self.__length_bytes.append(length & 0xFF)
 
     def get_length(self):
-        return int.from_bytes(self.__length_bytes, "big")
+        return int.from_bytes(bytes(self.__length_bytes), "big") if self.__length_bytes else 0
 
-    def set_length_bytes(self, bytes):
-        self.__length_bytes = bytes
+    def set_length_bytes(self, b):
+        # Accept bytes/bytearray/list of ints
+        if isinstance(b, (bytes, bytearray)):
+            self.__length_bytes = bytearray(b)
+        else:
+            self.__length_bytes = bytearray(b)
 
     def add_length_byte(self, byte):
-        'returns number of bytes left'
-
-        self.__length_bytes.append(byte)
-        # print(f"Length bytes left: {self.__length_of_length - len(self.__length_bytes)}")
+        self.__length_bytes.append(byte & 0xFF)
         return self.__length_of_length - len(self.__length_bytes)
 
-    def set_value_bytes(self, bytes):
-        self.__value_bytes = bytes
+    def set_value_bytes(self, b):
+        if isinstance(b, (bytes, bytearray)):
+            self.__value_bytes = bytearray(b)
+        else:
+            # list of ints
+            self.__value_bytes = bytearray(b)
 
     def set_value(self, value_byte):
-        self.__value_bytes.clear()
-        self.__value_bytes.append(value_byte.to_bytes(1, 'big')[0])
-        # print(f"Now value is: { [binascii.hexlify(byte.to_bytes(1, 'big')) for byte in self.__value_bytes]}")
-        # print(f"Length bytes left: {self.get_length() - len(self.__value_bytes)}")
+        self.__value_bytes = bytearray()
+        self.__value_bytes.append(value_byte & 0xFF)
         return self.get_length() - len(self.__value_bytes)
 
     def add_value_byte(self, byte):
-        'returns number of bytes left'
-        self.__value_bytes.append(byte)
-        # print(f"Length bytes left: {self.get_length() - len(self.__value_bytes)}")
-        # print(f"Now value is: { [binascii.hexlify(byte.to_bytes(1, 'big')) for byte in self.__value_bytes]}")
+        self.__value_bytes.append(byte & 0xFF)
         return self.get_length() - len(self.__value_bytes)
 
     def get_value_as_hex_str(self):
-        # print(f"Bytes are: {self.__value_bytes}")
         return (bytes(self.__value_bytes)).hex()
 
     def get_value_as_int(self):
+        # optional: implement when needed
         pass
 
     def add_child(self, tlv):
         if isinstance(tlv, str):
             raise AssertionError(f"Str input is not supported by add_child function. Passed value: {tlv}")
         if isinstance(tlv, list):
-            pass # TODO: Implement this
-            # self.__children_tlvs.extend(tlv)
+            # Optional: bulk insert
+            for it in tlv:
+                self.add_child(it)
         elif isinstance(tlv, (dict, OrderedDict)):
-            self.__children_tlvs.updte(tlv)
+            for k, v in tlv.items():
+                self.__children_tlvs[k.upper()] = v
         else:
-            if (tag_name:=tlv.get_tag().hex().upper()) in self.__children_tlvs:
+            tag_name = tlv.get_tag().hex().upper()
+            if tag_name in self.__children_tlvs:
                 raise LookupError(f"Tag duplication while parsing: {tag_name}")
             self.__children_tlvs[tag_name] = tlv
-            # print(f"Children dict after update: {self.__children_tlvs}")
 
     def get_as_list(self, tlv_element=None):
         if not tlv_element:
             tlv_element = self
         unfolded = [self.get_as_list(child) for child in tlv_element.__children_tlvs.values()]
-        # print(f"Processed: { [tlv_element, unfolded]}")
-        if len(unfolded) > 0:
-            return [tlv_element, unfolded]
-        else:
-            return tlv_element
+        return [tlv_element, unfolded] if len(unfolded) > 0 else tlv_element
 
-    def get_as_dict(self, tlv_element = None):
+    def get_as_dict(self, tlv_element=None):
         if not tlv_element:
             tlv_element = self
-            # print(f"Returning dict with: {tlv_element.get_tag().hex().upper()}")
             return {tlv_element.get_tag().hex().upper(): self.get_as_dict(tlv_element)}
-        # print(f"Next tlv tag is {tlv_element}")
         unfolded = {tag_name: self.get_as_dict(child) for tag_name, child in tlv_element.__children_tlvs.items()}
-        # print(f"Returning: {unfolded or tlv_element}")
         return unfolded or tlv_element
 
     def get_as_hex_str(self):
         l = self.get_as_dict()
         return pprint.pformat(l, indent=4)
 
-    def __convert_int_length_to_tlv_bytes(self, length):
-        result = bytes()
-        first_byte = 0x00
-
-        if length > 127:
-            length_bytes = length.to_bytes()
-            first_byte = set_bit(first_byte, 7)
-            first_byte = set_bit_range_from_int(first_byte, 0, len(length_bytes))
-
-            result += first_byte.to_bytes()
-            for byte in length_bytes[1:]:
-                result += byte
-
-            return result
-        else:
+    def __convert_int_length_to_tlv_bytes(self, length: int) -> bytes:
+        if length <= 127:
             return bytes([length])
+        lb = length.to_bytes((length.bit_length() + 7) // 8, 'big')
+        return bytes([0x80 | len(lb)]) + lb
 
     def __encode_child_elemens(self):
         result = bytes()
-        for tag_str, tlv_element in self.__children_tlvs:
+        for _, tlv_element in self.__children_tlvs.items():  # iterate items
             result += tlv_element.encode()
         return result
 
     def encode(self):
-        result = bytes()
-        first_byte = 0b00
+        # build first tag octet
+        first_byte = 0
         first_byte = set_bit_range_from_int(first_byte, 6, self.tag_class.value)
-        if len(self.__children_tlvs) > 0:
-            self.is_constructed = True
-        if self.is_constructed:
+        is_constructed_now = (len(self.__children_tlvs) > 0) or self.is_constructed
+        if is_constructed_now:
             first_byte = set_bit_range_from_int(first_byte, 5, 1)
         first_byte = set_bit_range_from_int(first_byte, 0, self.__tag_type_first_octet)
-        if self.is_tag_long_form:
+        if self.__is_tag_long_form:
             first_byte = set_bit_range_from_int(first_byte, 0, 31)
-        result += first_byte.to_bytes()
-        result += bytes(self.__tag_bytes[1:])
-        result += bytes(self.__length_bytes)
-        if not self.is_constructed:
-            result += bytes(self.__value_bytes)
-        else:
-            result += self.__encode_child_elemens()
 
-        return result
+        tag_bytes = bytes([first_byte]) + bytes(self.__tag_bytes[1:])
+
+        if is_constructed_now:
+            # encode children and set length from their total size
+            children_bytes = self.__encode_child_elemens()
+            self.__length_bytes = bytearray(self.__convert_int_length_to_tlv_bytes(len(children_bytes)))
+            return tag_bytes + bytes(self.__length_bytes) + children_bytes
+        else:
+            # primitive: set length from current value
+            self.__length_bytes = bytearray(self.__convert_int_length_to_tlv_bytes(len(self.__value_bytes)))
+            return tag_bytes + bytes(self.__length_bytes) + bytes(self.__value_bytes)
 
     def get_as_xml_str(self):
-        #TODO: Implement this
+        # TODO: Implement this if needed
         pass
-
-
-Tag = namedtuple('Tag', ['tag_class', 'is_constructed', 'tag_type', 'is_long_form'])
-TagTypeBytes = namedtuple('TagTypeBytes', ['more', 'tag_type'])
-Length = namedtuple('Length', ['is_long_form', 'length'])
 
 
 class BerTlvParser():
@@ -309,85 +293,68 @@ class BerTlvParser():
         EXPECTING_VALUE_NEXT_BYTE  = auto(),
 
     def changeParsingState(self, current_state, next_state):
-        # print(f"{current_state}  ==>  {next_state}")
         return next_state
 
-    # def __init__(self):
-        # self.__current_parsing_state = BerTlvParser.state.EXPECTING_TAG
+    def parse_tlv(self, bytesHexStr, parent_tlv=None):
+        b = binascii.unhexlify(bytesHexStr)
+        i = 0
+        result = [] if parent_tlv is None else None
 
-    def parse_tlv(self, bytesHexStr, parent_tlv = None):
-        # print(f"parse_tlv_hex_str called for {bytesHexStr}")
-        bytes = binascii.unhexlify(bytesHexStr)
-        tlv_tag = None
-        current_parsing_state = BerTlvParser.state.EXPECTING_TAG
-        # currentTag
-        raw_bytes_length = len(bytes)
-        for idx, byte in enumerate(bytes):
-            # print(f"Current byte is: {byte:02X}")
-            if current_parsing_state == BerTlvParser.state.EXPECTING_TAG:
-                tlv_tag = BerTlvElement(byte)
-                if tlv_tag.is_tag_long_form:
-                    current_parsing_state = self.changeParsingState(current_parsing_state, BerTlvParser.state.EXPECTING_TAG_NEXT_BYTE)
-                else:
-                    current_parsing_state = self.changeParsingState(current_parsing_state, BerTlvParser.state.EXPECTING_LENGTH)
+        while i < len(b):
+            # TAG (incl. long-form)
+            first = b[i]; i += 1
+            tlv_tag = BerTlvElement(first)
+            if tlv_tag.is_tag_long_form():
+                while True:
+                    nxt = b[i]; i += 1
+                    tnb = self.__parse_tag_next_byte(nxt)
+                    tlv_tag.add_tag_type_byte(tnb.tag_type)
+                    if not tnb.more:
+                        break
 
-            elif current_parsing_state == BerTlvParser.state.EXPECTING_TAG_NEXT_BYTE:
-                tag_type_data = self.__parse_tag_next_byte(byte)
-                tlv_tag.add_tag_type_byte(tag_type_data.tag_type)
-                if not tag_type_data.more:
-                    current_parsing_state = self.changeParsingState(current_parsing_state, BerTlvParser.state.EXPECTING_LENGTH)
+            # LENGTH (short/long)
+            first_len = b[i]; i += 1
+            ln = self.__parse_length(first_len)
+            if ln.is_long_form:
+                tlv_tag.set_length_of_length(ln.length)
+                tlv_tag.clear_length_bytes()
+                for _ in range(ln.length):
+                    tlv_tag.add_length_byte(b[i]); i += 1
+            else:
+                tlv_tag.set_length(ln.length)
 
-            elif current_parsing_state == BerTlvParser.state.EXPECTING_LENGTH:
-                length = self.__parse_length(byte)
-                if length.is_long_form:
-                    current_parsing_state = self.changeParsingState(current_parsing_state, BerTlvParser.state.EXPECTING_LENGTH_NEXT_BYTE)
-                    tlv_tag.set_length_of_length(length.length)
-                    tlv_tag.clear_length_bytes()   # we need this line  because by default empty tag already has one zero byte assigned as a length byte
-                else:
-                    tlv_tag.set_length(length.length)
-                    current_parsing_state = self.changeParsingState(current_parsing_state, BerTlvParser.state.EXPECTING_VALUE)
+            L = tlv_tag.get_length()
 
-            elif current_parsing_state == BerTlvParser.state.EXPECTING_LENGTH_NEXT_BYTE:
-                if 0 == tlv_tag.add_length_byte(byte):
-                    current_parsing_state = self.changeParsingState(current_parsing_state, BerTlvParser.state.EXPECTING_VALUE)
+            # VALUE
+            val = b[i:i + L]; i += L
+            tlv_tag.set_value_bytes(val)
 
-            elif current_parsing_state == BerTlvParser.state.EXPECTING_VALUE:
-                if 0 != tlv_tag.set_value(byte):
-                    current_parsing_state = self.changeParsingState(current_parsing_state, BerTlvParser.state.EXPECTING_VALUE_NEXT_BYTE)
-                else:
-                    if parent_tlv:
-                        parent_tlv.add_child(tlv_tag)
-                        current_parsing_state = self.changeParsingState(current_parsing_state,
-                                                                        BerTlvParser.state.EXPECTING_TAG)
-                    else:
-                        return tlv_tag
+            # recurse if constructed
+            if tlv_tag.is_constructed:
+                self.parse_tlv(tlv_tag.get_value_as_hex_str(), tlv_tag)
 
-            elif current_parsing_state == BerTlvParser.state.EXPECTING_VALUE_NEXT_BYTE:
-                if 0 == tlv_tag.add_value_byte(byte):
-                    current_parsing_state = self.changeParsingState(current_parsing_state, BerTlvParser.state.EXPECTING_TAG)
-                    if tlv_tag.is_constructed:
-                        self.parse_tlv(tlv_tag.get_value_as_hex_str(), tlv_tag)
-                    if parent_tlv:
-                        parent_tlv.add_child(tlv_tag)
-                        # tlv_tag = None
-                    else:
-                        return BerTlv(tlv_tag)
-        return BerTlv(tlv_tag)
+            # attach to parent or top-level result  (this was missing in your failing run)
+            if parent_tlv is not None:
+                parent_tlv.add_child(tlv_tag)
+            else:
+                result.append(tlv_tag)
+
+        # returns
+        if parent_tlv is not None:
+            return parent_tlv
+        if not result:
+            return None
+        return BerTlv(result if len(result) > 1 else result[0])
 
     def __parse_tag_next_byte(self, byte):
-        more     = (1 == get_bit_range_as_int(byte, 7, 8))
+        more = (1 == get_bit_range_as_int(byte, 7, 8))
         tag_type = get_bit_range_as_int(byte, 0, 8)
-        # print(f"more: {more}")
-        # print(f"tag_type: {tag_type:02X}")
         return TagTypeBytes(more, tag_type)
 
     def __parse_length(self, byte):
         is_long_form = (1 == get_bit_range_as_int(byte, 7, 8))
-        length       = get_bit_range_as_int(byte, 0, 7)
-        # print(f"is_long_form: {is_long_form}")
-        # print(f"length: {length}")
+        length = get_bit_range_as_int(byte, 0, 7)
         return Length(is_long_form, length)
-
 
 
 class BerTlv():
@@ -395,29 +362,29 @@ class BerTlv():
         self.tlv_elements = OrderedDict()
         if isinstance(data, (str, bytes)):
             parser = BerTlvParser()
-            parsed_elements = parser.parse_tlv(data)
-            for parsed_element in parsed_elements:
-                self.tlv_elements[parsed_element.get_tag().hex()] = parsed_element
+            parsed = parser.parse_tlv(data)
+            if isinstance(parsed, BerTlv):
+                for k, v in parsed.tlv_elements.items():
+                    self.tlv_elements[k.upper()] = v
+            elif isinstance(parsed, BerTlvElement):
+                self.tlv_elements[parsed.get_tag().hex().upper()] = parsed   # UPPER
+            elif isinstance(parsed, list):
+                for tlv_element in data:
+                    self.tlv_elements[tlv_element.get_tag().hex().upper()] = tlv_element   # UPPER
         elif isinstance(data, BerTlvElement):
-            self.tlv_elements[data.get_tag().hex()] = data
+            self.tlv_elements[data.get_tag().hex().upper()] = data
         elif isinstance(data, list):
             for tlv_element in data:
-                self.tlv_elements[tlv_element.get_tag().hex()] = tlv_element
+                self.tlv_elements[tlv_element.get_tag().hex().upper()] = tlv_element
         elif isinstance(data, dict):
             for tag, tlv_element in data.items():
-                self.tlv_elements[tag] = tlv_element
+                self.tlv_elements[tag.upper()] = tlv_element
 
-    # def get_tlv_tree_from_list(self, l_tlv, destination_dict):
-    #     if len(destination_dict == 0):
-    #         for tlv_element in l_tlv:
-    #             if len(tlv_element.get_children()) > 0:
-    #                 self.get_tlv_tree_from_list(l_tlv, destination_dict)
-    #
 
     def __wrap_with_dummy_tag(self):
         if len(self.tlv_elements) == 0:
             return None
-        if len(self.tlv_elements) > 1:  # if we have a list of elements here, then, first wrap it with a dummy tag first
+        if len(self.tlv_elements) > 1:
             dummy_tag = BerTlvElement(DUMMY_TAG)
             dummy_tag.add_child(self.tlv_elements)
             return dummy_tag
@@ -425,102 +392,111 @@ class BerTlv():
             first_key = next(iter(self.tlv_elements))
             return self.tlv_elements[first_key]
 
-    def find(self, path):
+    def find(self, path, _debug: bool = False):
         if not path:
-            #TODO: log warning here
             return None
         path = path.upper()
-        path_elements = path.split("/")
-        root_tag = None
-        if len(self.tlv_elements) > 1:  # if we have a list of elements here, then, first wrap it with a dummy tag
-            path_elements.insert(0, "FF")
+        path_elems = path.split("/")
+
         root_tag = self.__wrap_with_dummy_tag()
+        if _debug:
+            print(f"[find] path={path}  elems={path_elems}")
+            print(f"[find] have {len(self.tlv_elements)} root TLVs; dummy used? "
+                  f"{isinstance(root_tag, BerTlvElement) and root_tag.is_dummy}")
+
         if not root_tag:
+            if _debug: print("[find] no root_tag")
             return None
 
-        # tag_dict = root_tag.get_as_dict()
-        current_tag = root_tag
-        # if current_tag.get_tag().hex().upper() != path_elements[0]:
-        #     return None
-        for idx, path_element in enumerate(path_elements):
-            if isinstance(current_tag, BerTlvElement):
-                if current_tag.get_tag().hex().upper() == path_element:
-                    current_tag = current_tag.get_children()
+        # If we wrapped in a dummy FF, allow both "FF/..." and just "..."
+        if isinstance(root_tag, BerTlvElement) and getattr(root_tag, "is_dummy", False):
+            if path_elems and path_elems[0] == "FF":
+                if _debug: print("[find] stripping leading FF from path")
+                path_elems = path_elems[1:]
+            current = root_tag.get_children()  # start from children dict
+        else:
+            # Single-root case: do NOT inject FF
+            current = root_tag
+
+        # Walk the path
+        for idx, seg in enumerate(path_elems):
+            if isinstance(current, BerTlvElement):
+                if _debug:
+                    print(f"[find] at BerTlvElement tag={current.get_tag().hex().upper()} seg={seg}")
+                if current.get_tag().hex().upper() == seg:
+                    current = current.get_children()
                 else:
+                    if _debug: print("[find] tag mismatch")
                     return None
-            elif isinstance(current_tag, OrderedDict):
-                current_tag = current_tag.get(path_element, None)
-                if idx < len(path_elements) - 1:
-                    current_tag = current_tag.get_children()
-            if not current_tag:
+            elif isinstance(current, OrderedDict):
+                if _debug:
+                    print(f"[find] at OrderedDict; keys={list(current.keys())}  seg={seg}")
+                # case-insensitive lookup
+                upper_map = {k.upper(): v for k, v in current.items()}
+                hit = upper_map.get(seg)
+                if hit is None:
+                    if _debug: print("[find] key not found in dict")
+                    return None
+                if idx < len(path_elems) - 1:
+                    current = hit.get_children()
+                else:
+                    current = hit
+            else:
+                if _debug: print(f"[find] unexpected type: {type(current)}")
                 return None
-        return current_tag
+
+            if current is None:
+                if _debug: print("[find] current is None after step")
+                return None
+
+        if _debug:
+            if isinstance(current, BerTlvElement):
+                print(f"[find] result: tag={current.get_tag().hex().upper()} "
+                      f"len={current.get_length()} val={current.get_value_as_hex_str().upper()}")
+            else:
+                print(f"[find] result: dict keys={list(current.keys())}")
+        return current
 
 
     def insert_tlv_element(self, path, tlv_element):
-        find_rez = self.find(path)      #[0:path.rfind(PATH_SEPARATOR)])
+        find_rez = self.find(path)
         if find_rez:
             if isinstance(find_rez, BerTlvElement):
                 find_rez.add_child(tlv_element)
             else:
-                print(f"find_rez before insert: {find_rez}")
                 find_rez[tlv_element.get_tag().hex()] = tlv_element
-                print(f"find_rez after insert: {find_rez}")
         else:
             raise LookupError(f"Unable to find path: {path}")
-
 
     def insert_tlv_as_hex_str(self, path, hex_str):
         pass
 
-
     def update_tlv_element(self, tlv_element, dict):
         pass
-
-
-    # def insert_tlv_as_hex_str_after(self, path, hex_str):
-    #     tag = self.find(path)
-    #     if not tag:
-    #         raise AssertionError(f"Tag {path} not found")
-    #
-    #     parser = BerTlvParser()
-    #     tlv_element = parser.parse_tlv(hex_str)
-    #     if not tlv_element:
-    #         raise AssertionError(f"Unable to parse hex string as TLV sequence ({path}): {hex_str}")
-    #
-    #     if isinstance(tag, dict):
-    #         self.
-    #     elif isinstance(tag, BerTlvElement):
-    #         self.
-
 
     def insert_tag(self, path, tag, value):
         pass
 
-
     def create_tlv_element(self, tag_class, tag_type):
         pass
-        # tlv_element =
-
 
     def encode(self):
         result = bytes()
-        for tlv_element in self.tlv_elements:
-            result+=tlv_element.decode()
+        for _, tlv_element in self.tlv_elements.items():
+            result += tlv_element.encode()
+        return result
 
-    def get_as_list(self, tlv_element = None):
+    def get_as_list(self, tlv_element=None):
         root_tag = self.__wrap_with_dummy_tag()
         if not root_tag:
             return ""
         return root_tag.get_as_list()
 
-
-    def get_as_dict(self, tlv_element = None):
+    def get_as_dict(self, tlv_element=None):
         root_tag = self.__wrap_with_dummy_tag()
         if not root_tag:
             return ""
         return root_tag.get_as_dict()
-
 
     def get_as_hex_str(self):
         root_tag = self.__wrap_with_dummy_tag()
@@ -528,14 +504,14 @@ class BerTlv():
             return ""
         return root_tag.get_as_hex_str()
 
-
     def get_as_xml_str(self):
-        #TODO: Implement this
         pass
-
 
     def get_as_json(self):
-        #TODO: Implement this
         pass
 
 
+if __name__ == "__main__":
+    ber_tlv_parser = BerTlvParser()
+    tag_parsed = ber_tlv_parser.parse_tlv()
+    print(f"\nAll tag as hex str: {tag_parsed.get_as_hex_str()}")
